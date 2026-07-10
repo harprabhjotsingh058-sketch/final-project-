@@ -1,146 +1,155 @@
-"""
-Mohali Weather Dashboard
-Run with: streamlit run weather_dashboard.py
-Requires: pip install streamlit pandas numpy seaborn matplotlib
-"""
-
-import streamlit as st
+import requests
 import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
+from datetime import datetime
+import os
 
-# ---------------------------------------------------------
-# Page config
-# ---------------------------------------------------------
-st.set_page_config(
-    page_title="Mohali Weather Dashboard",
-    page_icon="🌦️",
-    layout="wide",
-)
+# ==============================
+# OpenWeatherMap API Key
+# ==============================
+API_KEY = "2ba5a1b4a30ad67dce1ad2821211d8aa"
 
-sns.set_theme(style="whitegrid")
+BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
 
-# ---------------------------------------------------------
-# Data (live snapshot fetched for Mohali, Punjab, India)
-# ---------------------------------------------------------
-CURRENT = {
-    "location": "Mohali, Punjab, India",
-    "temperature_f": 82.0,
-    "condition": "Light rain (drizzle)",
-    "is_day": True,
-}
+# store history next to this script to avoid path problems
+CSV_FILE = os.path.join(os.path.dirname(__file__), "weather_history.csv")
 
-daily_data = [
-    {"date": "2026-07-09", "day": "Thursday", "high_f": 82.2, "precip_chance": 95, "precip_type": "rain"},
-    {"date": "2026-07-10", "day": "Friday",   "high_f": 91.0, "precip_chance": 35, "precip_type": "rain"},
-    {"date": "2026-07-11", "day": "Saturday", "high_f": 91.7, "precip_chance": 55, "precip_type": "rain"},
-    {"date": "2026-07-12", "day": "Sunday",   "high_f": 95.0, "precip_chance": 35, "precip_type": "rain"},
-    {"date": "2026-07-13", "day": "Monday",   "high_f": 96.9, "precip_chance": 35, "precip_type": "rain"},
-]
 
-df = pd.DataFrame(daily_data)
-df["date"] = pd.to_datetime(df["date"])
-df["high_c"] = (df["high_f"] - 32) * 5.0 / 9.0  # numpy-friendly vectorized conversion
-df["high_c"] = np.round(df["high_c"], 1)
+def get_weather(city):
+    params = {
+        "q": city,
+        "appid": API_KEY,
+        "units": "metric"
+    }
 
-# ---------------------------------------------------------
-# Header
-# ---------------------------------------------------------
-st.title("🌦️ Mohali Weather Dashboard")
-st.caption(f"Live forecast snapshot for {CURRENT['location']}")
+    try:
+        response = requests.get(BASE_URL, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"\nNetwork/API error: {e}\n")
+        return None
 
-# ---------------------------------------------------------
-# Current conditions - metric cards
-# ---------------------------------------------------------
-col1, col2, col3 = st.columns(3)
-col1.metric("Current Temperature", f"{CURRENT['temperature_f']}°F")
-col2.metric("Condition", CURRENT["condition"])
-col3.metric("Today's High", f"{df.iloc[0]['high_f']}°F", f"{df.iloc[0]['precip_chance']}% rain")
+    try:
+        data = response.json()
+    except ValueError:
+        print("\nInvalid response from API.\n")
+        return None
 
-st.divider()
+    # API may return JSON with 'cod' != 200 and message
+    if str(data.get("cod")) != "200":
+        msg = data.get("message", "Unknown API error")
+        print(f"\nAPI error: {msg}\n")
+        return None
 
-# ---------------------------------------------------------
-# Forecast table
-# ---------------------------------------------------------
-st.subheader("5-Day Forecast Data")
-st.dataframe(
-    df[["day", "date", "high_f", "high_c", "precip_chance", "precip_type"]].rename(
-        columns={
-            "day": "Day",
-            "date": "Date",
-            "high_f": "High (°F)",
-            "high_c": "High (°C)",
-            "precip_chance": "Rain Chance (%)",
-            "precip_type": "Type",
+    return data
+
+
+def display_weather(data):
+    # use safe accessors with defaults
+    city = data.get("name", "N/A")
+    country = data.get("sys", {}).get("country", "N/A")
+
+    temperature = data.get("main", {}).get("temp", "N/A")
+    feels_like = data.get("main", {}).get("feels_like", "N/A")
+    humidity = data.get("main", {}).get("humidity", "N/A")
+    pressure = data.get("main", {}).get("pressure", "N/A")
+
+    weather = "N/A"
+    try:
+        weather = data.get("weather", [{}])[0].get("description", "N/A").title()
+    except Exception:
+        pass
+
+    wind_speed = data.get("wind", {}).get("speed", "N/A")
+
+    print("\n==============================")
+    print("      WEATHER REPORT")
+    print("==============================")
+    print(f"City        : {city}, {country}")
+    print(f"Temperature : {temperature} °C")
+    print(f"Feels Like  : {feels_like} °C")
+    print(f"Humidity    : {humidity}%")
+    print(f"Pressure    : {pressure} hPa")
+    print(f"Weather     : {weather}")
+    print(f"Wind Speed  : {wind_speed} m/s")
+    print("==============================\n")
+
+
+def save_history(data):
+    try:
+        record = {
+            "Date & Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "City": data.get("name", "N/A"),
+            "Country": data.get("sys", {}).get("country", "N/A"),
+            "Temperature": data.get("main", {}).get("temp", "N/A"),
+            "Feels Like": data.get("main", {}).get("feels_like", "N/A"),
+            "Humidity": data.get("main", {}).get("humidity", "N/A"),
+            "Pressure": data.get("main", {}).get("pressure", "N/A"),
+            "Weather": data.get("weather", [{}])[0].get("description", "N/A"),
+            "Wind Speed": data.get("wind", {}).get("speed", "N/A")
         }
-    ),
-    use_container_width=True,
-    hide_index=True,
-)
 
-st.divider()
+        df = pd.DataFrame([record])
 
-# ---------------------------------------------------------
-# Charts
-# ---------------------------------------------------------
-chart_col1, chart_col2 = st.columns(2)
+        if os.path.exists(CSV_FILE):
+            df.to_csv(CSV_FILE, mode='a', index=False, header=False)
+        else:
+            df.to_csv(CSV_FILE, index=False)
+    except Exception as e:
+        print(f"\nFailed to save history: {e}\n")
 
-with chart_col1:
-    st.subheader("High Temperature Trend")
-    fig1, ax1 = plt.subplots(figsize=(6, 4))
-    sns.lineplot(data=df, x="day", y="high_f", marker="o", linewidth=2.5, color="#D9534F", ax=ax1)
-    ax1.set_ylabel("High Temp (°F)")
-    ax1.set_xlabel("")
-    ax1.set_title("5-Day High Temperature (°F)")
-    for i, row in df.iterrows():
-        ax1.annotate(f"{row['high_f']:.0f}°F", (i, row["high_f"]), textcoords="offset points", xytext=(0, 8), ha="center")
-    plt.tight_layout()
-    st.pyplot(fig1)
 
-with chart_col2:
-    st.subheader("Rain Probability")
-    fig2, ax2 = plt.subplots(figsize=(6, 4))
-    colors = sns.color_palette("Blues", n_colors=len(df))
-    order = np.argsort(df["precip_chance"].values)
-    palette = np.array(colors)[np.argsort(order)]
-    sns.barplot(data=df, x="day", y="precip_chance", palette=list(palette), ax=ax2)
-    ax2.set_ylabel("Rain Chance (%)")
-    ax2.set_xlabel("")
-    ax2.set_title("5-Day Precipitation Chance (%)")
-    ax2.set_ylim(0, 100)
-    plt.tight_layout()
-    st.pyplot(fig2)
+def show_history():
+    if not os.path.exists(CSV_FILE):
+        print("\nNo history found.\n")
+        return
 
-st.divider()
+    try:
+        df = pd.read_csv(CSV_FILE)
+        if df.empty:
+            print("\nHistory is empty.\n")
+            return
+        print("\n========= WEATHER HISTORY =========")
+        print(df)
+        print("===================================\n")
+    except pd.errors.EmptyDataError:
+        print("\nHistory file is empty or corrupted.\n")
+    except Exception as e:
+        print(f"\nFailed to read history: {e}\n")
 
-# ---------------------------------------------------------
-# Combined chart - temp vs rain (dual axis)
-# ---------------------------------------------------------
-st.subheader("Temperature vs. Rain Chance (Combined View)")
-fig3, ax3 = plt.subplots(figsize=(10, 4.5))
-ax3.plot(df["day"], df["high_f"], color="#D9534F", marker="o", linewidth=2.5, label="High Temp (°F)")
-ax3.set_ylabel("High Temp (°F)", color="#D9534F")
-ax3.tick_params(axis="y", labelcolor="#D9534F")
 
-ax4 = ax3.twinx()
-ax4.bar(df["day"], df["precip_chance"], alpha=0.3, color="#4A90D9", label="Rain Chance (%)")
-ax4.set_ylabel("Rain Chance (%)", color="#4A90D9")
-ax4.tick_params(axis="y", labelcolor="#4A90D9")
+def main():
+    while True:
+        print("========== LIVE WEATHER DASHBOARD ==========")
+        print("1. Check Weather")
+        print("2. View Weather History")
+        print("3. Exit")
 
-fig3.suptitle("Mohali: High Temperature & Rain Probability")
-plt.tight_layout()
-st.pyplot(fig3)
+        choice = input("\nEnter your choice: ").strip()
 
-# ---------------------------------------------------------
-# Summary stats using numpy
-# ---------------------------------------------------------
-st.divider()
-st.subheader("Quick Stats")
-stat1, stat2, stat3, stat4 = st.columns(4)
-stat1.metric("Avg High (°F)", f"{np.mean(df['high_f']):.1f}")
-stat2.metric("Max High (°F)", f"{np.max(df['high_f']):.1f}")
-stat3.metric("Avg Rain Chance", f"{np.mean(df['precip_chance']):.0f}%")
-stat4.metric("Temp Range (°F)", f"{np.ptp(df['high_f']):.1f}")
+        if choice == "1":
+            city = input("Enter City Name: ").strip()
+            if not city:
+                print("\nPlease enter a city name.\n")
+                continue
 
-st.caption("Data snapshot fetched for Mohali, Punjab, India — values reflect the forecast at time of retrieval.")
+            data = get_weather(city)
+
+            if data:
+                display_weather(data)
+                save_history(data)
+            else:
+                print("\nCould not retrieve weather for that city.\n")
+
+        elif choice == "2":
+            show_history()
+
+        elif choice == "3":
+            print("\nThank you!\n")
+            break
+
+        else:
+            print("\nInvalid Choice!\n")
+
+
+if __name__ == "__main__":
+    main()
